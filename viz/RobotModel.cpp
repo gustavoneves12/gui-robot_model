@@ -158,7 +158,7 @@ void OSGSegment::attachVisual(boost::shared_ptr<urdf::Visual> visual, QDir baseD
 
     to_visual->addChild(osg_visual);
     to_visual->setName(seg_.getName());
-    osg_visual->setUserData(this);
+    to_visual->setUserData(this);
     visual_ = osg_visual->asGeode();
 }
 
