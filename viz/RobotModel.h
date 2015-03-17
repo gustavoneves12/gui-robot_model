@@ -85,7 +85,6 @@ protected:
      *
      */
     void updateJoint();
-
     /**
     * @brief Attach visual mesh to node.
     *
@@ -112,6 +111,8 @@ private:
     osg::Geode* visual_; /**< OSG node for visual element */
     osg::Geode* label_; /**< OSG node for label */
     bool isSelected_; /**< Selection state */
+
+    osg::Vec3d position_;
 
     friend class InteractionHandler;
     friend class OSGSegmentCallback;
@@ -216,6 +217,9 @@ protected:
     osg::Group* root_; /**< Root of the OSG scene containing the robot */
     std::vector<std::string> jointNames_; /**< Joint names defined in URDF (joint of type none are NOT included) */
     std::vector<std::string> segmentNames_; /**< Segment names defined in URDF */
+
+    std::string modelName; /**< Model name */
+
     QDir rootPrefix;
 
 public:
@@ -231,8 +235,11 @@ public:
     bool setJointState(const std::map<std::string,double>& jointVals);
     bool toggleHighlight(std::string);
 
+    std::string getModelName() { return modelName; }
+
     friend class InteractionHandler;
     friend class URDFRobotWidget;
+
 };
 
 #endif
