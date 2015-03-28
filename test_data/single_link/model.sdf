@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sdf version="1.4">
+	<model name="single_link">
+	   <link name="base">
+	        <visual name="visual_base">
+		       <pose>0 0 0 0 0 0</pose>
+		       <geometry>
+		           <box>
+		               <size>1 0.5 2</size>
+		           </box>
+		       </geometry>
+		   </visual>
+	   </link>
+	</model>
+</sdf>

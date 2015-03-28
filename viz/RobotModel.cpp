@@ -23,6 +23,31 @@
 #include <fstream>
 #include <streambuf>
 
+#define CALL_MEMBER_POINTER_FUNCTION(obj, fnc) ((obj).*(fnc))
+
+
+void addSegmentRecursive(std::map<std::string, std::vector<std::string> > map,
+                        std::string parent_name,
+                        KDL::Tree& tree)
+{
+
+    std::map<std::string, std::vector<std::string> >::iterator parent_itr = map.find(parent_name);
+
+    if (parent_itr != map.end()){
+        for (std::vector<std::string>::iterator child_itr = parent_itr->second.begin(); child_itr != parent_itr->second.end(); child_itr++) {
+
+            KDL::Joint joint;
+            KDL::Frame f_tip;
+            KDL::RigidBodyInertia I;
+            KDL::Segment segment(*child_itr, joint, f_tip, I);
+
+            tree.addSegment(segment, parent_name);
+
+            addSegmentRecursive(map, *child_itr, tree);
+        }
+    }
+}
+
 OSGSegment::OSGSegment(osg::Node* node, KDL::Segment seg)
 {
     isSelected_=false;
@@ -162,6 +187,100 @@ void OSGSegment::attachVisual(boost::shared_ptr<urdf::Visual> visual, QDir baseD
     visual_ = osg_visual->asGeode();
 }
 
+void OSGSegment::attachVisual(sdf::ElementPtr sdf_visual, QDir baseDir){
+
+    osg::PositionAttitudeTransform* to_visual = new osg::PositionAttitudeTransform();
+    sdf_pose_to_osg(sdf_visual->GetElement("pose"), *to_visual);
+
+    toTipOsg_->addChild(to_visual);
+    toTipOsg_->setName(seg_.getJoint().getName());
+
+    osg::Node* osg_visual = 0;
+    if (sdf_visual->HasElement("geometry")){
+        sdf::ElementPtr sdf_geometry  = sdf_visual->GetElement("geometry");
+        sdf::ElementPtr sdf_geom_elem = sdf_geometry->GetFirstElement();
+
+        if (sdf_geom_elem->GetName() == "box"){
+            osg::Vec3f size;
+            sdf_size_to_osg(sdf_geom_elem->GetElement("size"), size);
+            osg::ShapeDrawable* drawable = new osg::ShapeDrawable(new osg::Box(osg::Vec3(0,0,0), size.x(), size.y(), size.z()));
+            osg_visual = new osg::Geode;
+            osg_visual->asGeode()->addDrawable(drawable);
+        }
+        else if (sdf_geom_elem->GetName() == "cylinder"){
+            double radius = sdf_geom_elem->GetElement("radius")->Get<double>();
+            double length = sdf_geom_elem->GetElement("length")->Get<double>();
+            osg::ShapeDrawable* drawable = new osg::ShapeDrawable(new osg::Cylinder(osg::Vec3d(0,0,0), radius, length));
+            osg_visual = new osg::Geode;
+            osg_visual->asGeode()->addDrawable(drawable);
+        }
+        else if (sdf_geom_elem->GetName() == "sphere"){
+            double radius = sdf_geom_elem->GetElement("radius")->Get<double>();
+            osg::ShapeDrawable* drawable = new osg::ShapeDrawable(new osg::Sphere(osg::Vec3d(0,0,0), radius));
+            osg_visual = new osg::Geode;
+            osg_visual->asGeode()->addDrawable(drawable);
+        }
+        else if  (sdf_geom_elem->GetName() == "mesh"){
+            osg::Vec3 scale;
+            sdf_scale_to_osg(sdf_geom_elem->GetElement("scale"), scale);
+
+            to_visual->setScale(scale);
+
+            std::string uri = sdf_geom_elem->GetElement("uri")->Get<std::string>();
+
+            std::string model_prefix = "model://";
+
+            std::string filename = "";
+
+            if(uri.compare(0, model_prefix.length(), model_prefix) == 0){
+                filename = uri.substr(model_prefix.length());
+            }
+            else {
+                filename = uri;
+            }
+
+            QString qfilename = QString::fromStdString(filename);
+            if (QFileInfo(qfilename).isRelative()){
+//                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).fileName()).toStdString();
+                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).baseName()).toStdString();
+                filename += ".osg";
+            }
+
+            std::cout << "filename: " << filename << std::endl;
+
+            osg_visual = osgDB::readNodeFile(filename);
+
+            if (!osg_visual) {
+                LOG_ERROR("OpenSceneGraph did not succees loading the mesh file %s.", filename.c_str());
+                throw std::runtime_error("Error loading mesh file.");
+            }
+
+        }
+        else {
+            osg_visual = new osg::Geode;
+        }
+
+    }
+
+    to_visual->addChild(osg_visual);
+    to_visual->setName(seg_.getName());
+    to_visual->setUserData(this);
+
+    visual_ = osg_visual->asGeode();
+}
+
+void OSGSegment::attachVisuals(std::vector<sdf::ElementPtr> &visual_array, QDir prefix){
+
+    std::vector<sdf::ElementPtr>::iterator itr = visual_array.begin();
+    std::vector<sdf::ElementPtr >::iterator itr_end = visual_array.end();
+
+    for(itr = visual_array.begin(); itr != itr_end; ++itr)
+    {
+        sdf::ElementPtr visual = *itr;
+        attachVisual(visual, prefix);
+    }
+}
+
 void OSGSegment::removeLabel(){
     if(label_)
         toTipOsg_->removeChild(label_);
@@ -255,6 +374,9 @@ RobotModel::RobotModel(){
     osg::Group* root = new osg::Group();
     root_ = root;
     loadEmptyScene();
+
+    loadFunctions["urdf"] = &RobotModel::loadURDF;
+    loadFunctions["sdf"] = &RobotModel::loadSDF;
 }
 
 osg::Node* RobotModel::loadEmptyScene(){
@@ -284,6 +406,39 @@ osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, urdf::Link urdf_link, osg:
     {
          std::vector<boost::shared_ptr<urdf::Visual> > visual_array = urdf_link.visual_array;
          seg->attachVisuals(visual_array, rootPrefix);
+    }
+
+    return joint_forward;
+}
+
+osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, sdf::ElementPtr sdf_link, osg::Group* root){
+
+    std::vector<sdf::ElementPtr> visuals;
+
+    if (sdf_link->HasElement("visual")){
+
+        sdf::ElementPtr visualElem= sdf_link->GetElement("visual");
+        while (visualElem){
+            visuals.push_back(visualElem);
+            visualElem = visualElem->GetNextElement("visual");
+        }
+    }
+
+
+    osg::PositionAttitudeTransform* joint_forward = new osg::PositionAttitudeTransform();
+    OSGSegment* seg = new OSGSegment(joint_forward, kdl_seg);
+
+    joint_forward->setUserData( seg );
+    joint_forward->setUpdateCallback(new OSGSegmentCallback);
+
+    root->addChild(joint_forward);
+
+    if (visuals.size() > 0)
+    {
+        seg->attachVisuals(visuals, rootPrefix);
+    }
+    else {
+        seg->attachVisual(visuals[0], rootPrefix);
     }
 
     return joint_forward;
@@ -341,22 +496,173 @@ osg::Node* RobotModel::makeOsg( boost::shared_ptr<urdf::ModelInterface> urdf_mod
     return root_;
 }
 
+osg::Node* RobotModel::makeOsg( sdf::ElementPtr sdf_model )
+{
+
+    std::string model_name = sdf_model->GetAttribute("name")->GetAsString();
+
+    std::map<std::string, sdf::ElementPtr> child_link_joint_map;
+
+    if (sdf_model->HasElement("joint")){
+        sdf::ElementPtr jointElem = sdf_model->GetElement("joint");
+
+        while (jointElem){
+            std::string child_link_name = jointElem->GetElement("child")->Get<std::string>();
+            child_link_joint_map.insert(std::make_pair<std::string, sdf::ElementPtr>(child_link_name, jointElem));
+            jointElem = jointElem->GetNextElement("joint");
+        }
+    }
+
+
+    std::map<std::string, sdf::ElementPtr> links_map;
+
+    if (sdf_model->HasElement("link")){
+        sdf::ElementPtr linkElem = sdf_model->GetElement("link");
+        while (linkElem){
+            std::string link_name = linkElem->Get<std::string>("name");
+            links_map.insert(std::make_pair<std::string, sdf::ElementPtr>(link_name, linkElem));
+            linkElem = linkElem->GetNextElement("link");
+        }
+    }
+
+    std::map<std::string, sdf::ElementPtr>::iterator links_it;
+    std::map<std::string, sdf::ElementPtr>::iterator child_link_joint_it;
+    std::map<std::string, std::vector<std::string> > parent_childs_map;
+
+    for (links_it = links_map.begin(); links_it != links_map.end(); links_it++) {
+        std::string child_name = links_it->first;
+        std::string parent_name = "root";
+
+        if ((child_link_joint_it = child_link_joint_map.find(child_name)) != child_link_joint_map.end()) {
+            parent_name = child_link_joint_it->second->GetElement("parent")->Get<std::string>();
+        }
+
+        std::cout << "parent_name: " << parent_name << std::endl;
+        std::cout << "child_name: " << child_name << std::endl;
+
+        std::map<std::string, std::vector<std::string> >::iterator parent_it = parent_childs_map.find(parent_name);
+
+        if (parent_it == parent_childs_map.end()){
+            std::vector<std::string> childs;
+            childs.push_back(child_name);
+            parent_childs_map.insert(std::make_pair<std::string, std::vector<std::string> >(parent_name, childs));
+        }
+        else {
+            parent_it->second.push_back(child_name);
+        }
+    }
+
+    KDL::Tree tree("root");
+    addSegmentRecursive(parent_childs_map, "root", tree);
+
+
+    KDL::SegmentMap::const_iterator root = tree.getRootSegment();
+
+    std::vector<KDL::SegmentMap::const_iterator> segment_buffer;
+    std::vector<osg::Node*> hook_buffer;
+
+    osg::Node* hook = 0;
+    segment_buffer.reserve(segment_buffer.size() + std::distance(root->second.children.begin(), root->second.children.end()));
+    segment_buffer.insert(segment_buffer.end(), root->second.children.begin(), root->second.children.end());
+
+    for(uint i = 0; i < root->second.children.size(); i++){
+        hook_buffer.push_back(root_);
+    }
+
+
+    while (!segment_buffer.empty()){
+
+        std::map<std::string, sdf::ElementPtr>::const_iterator link_element;
+
+        KDL::SegmentMap::const_iterator it = segment_buffer.back();
+        segment_buffer.pop_back();
+        KDL::Segment kdl_segment = it->second.segment;
+
+        if (it->second.children.size() > 0){
+            segment_buffer.reserve(segment_buffer.size() + std::distance(it->second.children.begin(), it->second.children.end()));
+            segment_buffer.insert(segment_buffer.end(), it->second.children.begin(), it->second.children.end());
+        }
+
+        if (links_map.find(kdl_segment.getName()) != links_map.end()){
+            sdf::ElementPtr sdf_link = links_map[kdl_segment.getName()];
+
+            //create osg link
+            hook = hook_buffer.back();
+            hook_buffer.pop_back();
+
+            osg::Node* new_hook = 0;
+            new_hook = makeOsg2(kdl_segment, sdf_link, hook->asGroup());
+
+            //Append hooks
+            for(uint i = 0; i < it->second.children.size(); i++){
+                hook_buffer.push_back(new_hook);
+            }
+
+        }
+
+    }
+
+    return root_;
+}
+
 osg::Node* RobotModel::load(QString path){
 
     loadEmptyScene();
 
+    QString suffix = QFileInfo(path).suffix().toLower();
+
+    if (loadFunctions.contains(suffix)){
+        return CALL_MEMBER_POINTER_FUNCTION(*this, loadFunctions[suffix])(path);
+    }
+    else {
+        LOG_ERROR("the %s type of file is not supported .", suffix.toStdString().c_str());
+    }
+
+    return new osg::Group();
+}
+
+osg::Node* RobotModel::loadURDF(QString path)
+{
     std::ifstream t( path.toStdString().c_str() );
     std::string xml_str((std::istreambuf_iterator<char>(t)),
-	                     std::istreambuf_iterator<char>());
+                       std::istreambuf_iterator<char>());
+
+    rootPrefix = QDir(QFileInfo(path).absoluteDir());
+
     //Parse urdf
     boost::shared_ptr<urdf::ModelInterface> model = urdf::parseURDF( xml_str );
-    rootPrefix = QDir(QFileInfo(path).absoluteDir());
     if (!model)
         return NULL;
 
     modelName =  model->getName();
 
     return makeOsg(model);
+}
+
+osg::Node* RobotModel::loadSDF(QString path)
+{
+    rootPrefix = QDir(QFileInfo(path).absoluteDir());
+
+    std::cout << "rootPrefix: " << rootPrefix.absolutePath().toStdString() << std::endl;
+
+    sdf::SDFPtr sdf(new sdf::SDF);
+
+    if (!sdf::init(sdf)){
+        LOG_ERROR("unable to initialize sdf.");
+        return NULL;
+    }
+
+    if (!sdf::readFile(path.toStdString(), sdf)){
+        LOG_ERROR("unabled to read sdf file %s.", path.toStdString().c_str());
+        return NULL;
+    }
+
+    if (!sdf->root->HasElement("model")){
+        LOG_ERROR("the <model> tag not exists");
+        return NULL;
+    }
+
+    return makeOsg(sdf->root->GetElement("model"));
 }
 
 OSGSegment* RobotModel::getSegment(std::string name)
@@ -368,6 +674,7 @@ OSGSegment* RobotModel::getSegment(std::string name)
     OSGSegment* jnt = dynamic_cast<OSGSegment*>(node->getUserData());
     if(!jnt)
         return 0;
+
     return jnt;
 }
 

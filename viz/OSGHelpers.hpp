@@ -14,8 +14,29 @@ inline osg::Vec3 urdf_to_osg(const urdf::Vector3 &in){
 
 inline void urdf_to_osg(urdf::Pose& in, osg::PositionAttitudeTransform& out){
     out.setPosition(urdf_to_osg(in.position));
-    //std::cout << in.position.x << ","<< in.position.y<<","<< in.position.z<<std::endl;
     out.setAttitude(osg::Quat(in.rotation.x, in.rotation.y, in.rotation.z, in.rotation.w));
+}
+
+
+inline void sdf_pose_to_osg(sdf::ElementPtr pose, osg::PositionAttitudeTransform& out)
+{
+    double x, y, z;
+    double roll, pitch, yaw;
+    sscanf(pose->Get<std::string>().c_str(), "%lf %lf %lf %lf %lf %lf", &x, &y, &z, &roll, &pitch, &yaw);
+    out.setPosition(osg::Vec3(x, y, z));
+    out.setAttitude(osg::Quat(roll, osg::Vec3d(1, 0, 0), pitch, osg::Vec3d(0, 1, 0), yaw, osg::Vec3d(0, 0, 1)));
+}
+
+inline void sdf_size_to_osg(sdf::ElementPtr size, osg::Vec3& out)
+{
+    double x, y, z;
+    sscanf(size->Get<std::string>().c_str(), "%lf %lf %lf", &x, &y, &z);
+    out.set(x, y, z);
+}
+
+inline void sdf_scale_to_osg(sdf::ElementPtr scale, osg::Vec3& out)
+{
+    sdf_size_to_osg(scale, out);
 }
 
 inline osg::Node* findNamedNode(const std::string& searchName,
