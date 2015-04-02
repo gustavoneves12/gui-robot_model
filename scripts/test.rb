@@ -2,17 +2,34 @@ require 'vizkit'
 
 view3d = Vizkit.vizkit3d_widget
 
-#single_link_model = Vizkit.default_loader.RobotVisualization
-#single_link_model.modelFile = File.join(Dir.pwd, 'test_data', 'single_link', 'model.sdf')
+#model_file = File.join(Dir.pwd, 'test_data', 'spacebot_arm', 'spacebot_arm.urdf')
+model_file = File.join(Dir.pwd, 'test_data', 'simple_arm', 'model.sdf')
 
-#multiple_visuals_model = Vizkit.default_loader.RobotVisualization
-#multiple_visuals_model.modelFile = File.join(Dir.pwd, 'test_data', 'multiple_visuals', 'model.sdf')
+view3d = Vizkit.vizkit3d_widget
 
-#multiple_links_model = Vizkit.default_loader.RobotVisualization
-#multiple_links_model.modelFile = File.join(Dir.pwd, 'test_data', 'multiple_links', 'model.sdf')
+vis_gui = Vizkit.default_loader.RobotVisualization
+vis_gui.modelFile = model_file.dup
+vis_gui.jointsSize = 0.02
 
-with_joints_model = Vizkit.default_loader.RobotVisualization
-with_joints_model.modelFile = File.join(Dir.pwd, 'test_data', 'with_joints', 'model.sdf')
+override_vel_limits=0
+only_positive=true
+no_effort=true
+no_velocity=true
 
-view3d.show
+ctrl_gui = Vizkit.default_loader.ControlUi
+ctrl_gui.configureUi(override_vel_limits, only_positive, no_effort, no_velocity)
+#ctrl_gui.initFromURDF(model_file.dup)
+ctrl_gui.initFromSDF(model_file.dup)
+ctrl_gui.connect(SIGNAL('sendSignal()')) do 
+    sample = ctrl_gui.getJoints()
+    vis_gui.updateData(sample)
+end
+
+main = Qt::Widget.new
+layout = Qt::VBoxLayout.new(main)
+layout.add_widget(view3d)
+layout.add_widget(ctrl_gui)
+main.show
+
+
 Vizkit.exec

@@ -23,30 +23,14 @@
 #include <fstream>
 #include <streambuf>
 
+#include <osgDB/Registry>
+#include <osgDB/ReadFile>
+#include <osgDB/WriteFile>
+#include <osgDB/FileNameUtils>
+#include <osgDB/ReaderWriter>
+#include <osgDB/PluginQuery>
+
 #define CALL_MEMBER_POINTER_FUNCTION(obj, fnc) ((obj).*(fnc))
-
-
-void addSegmentRecursive(std::map<std::string, std::vector<std::string> > map,
-                        std::string parent_name,
-                        KDL::Tree& tree)
-{
-
-    std::map<std::string, std::vector<std::string> >::iterator parent_itr = map.find(parent_name);
-
-    if (parent_itr != map.end()){
-        for (std::vector<std::string>::iterator child_itr = parent_itr->second.begin(); child_itr != parent_itr->second.end(); child_itr++) {
-
-            KDL::Joint joint;
-            KDL::Frame f_tip;
-            KDL::RigidBodyInertia I;
-            KDL::Segment segment(*child_itr, joint, f_tip, I);
-
-            tree.addSegment(segment, parent_name);
-
-            addSegmentRecursive(map, *child_itr, tree);
-        }
-    }
-}
 
 OSGSegment::OSGSegment(osg::Node* node, KDL::Segment seg)
 {
@@ -241,12 +225,10 @@ void OSGSegment::attachVisual(sdf::ElementPtr sdf_visual, QDir baseDir){
 
             QString qfilename = QString::fromStdString(filename);
             if (QFileInfo(qfilename).isRelative()){
-//                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).fileName()).toStdString();
-                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).baseName()).toStdString();
-                filename += ".osg";
+                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).fileName()).toStdString();
+//                filename = baseDir.absoluteFilePath(QFileInfo(qfilename).baseName()).toStdString();
+//                filename += ".osg";
             }
-
-            std::cout << "filename: " << filename << std::endl;
 
             osg_visual = osgDB::readNodeFile(filename);
 
@@ -259,8 +241,50 @@ void OSGSegment::attachVisual(sdf::ElementPtr sdf_visual, QDir baseDir){
         else {
             osg_visual = new osg::Geode;
         }
-
     }
+
+    if (sdf_visual->HasElement("material")){
+
+        osg::ref_ptr<osg::Material> nodematerial = new osg::Material;
+
+        nodematerial->setSpecular(osg::Material::FRONT,osg::Vec4(0.2,
+                                                                 0.2,
+                                                                 0.2,
+                                                                 1));
+
+        sdf::ElementPtr sdf_material = sdf_visual->GetElement("material");
+
+        if (sdf_material->HasElement("ambient")){
+            osg::Vec4 ambient;
+            sdf_color_to_osg(sdf_material->GetElement("ambient"), ambient);
+            nodematerial->setAmbient(osg::Material::FRONT,ambient);
+        }
+
+        if (sdf_material->HasElement("diffuse")){
+            osg::Vec4 diffuse;
+            sdf_color_to_osg(sdf_material->GetElement("diffuse"), diffuse);
+            nodematerial->setDiffuse(osg::Material::FRONT,diffuse);
+        }
+
+        if (sdf_material->HasElement("specular")){
+            osg::Vec4 specular;
+            sdf_color_to_osg(sdf_material->GetElement("specular"), specular);
+            nodematerial->setSpecular(osg::Material::FRONT, specular);
+
+        }
+
+        if (sdf_material->HasElement("emissive")){
+            osg::Vec4 emissive;
+            sdf_color_to_osg(sdf_material->GetElement("emissive"), emissive);
+            nodematerial->setEmission(osg::Material::FRONT, emissive);
+        }
+
+        osg::ref_ptr<osg::StateSet> nodess = osg_visual->getOrCreateStateSet();
+        nodess->setMode(GL_NORMALIZE, osg::StateAttribute::ON);
+        nodess->setAttribute(nodematerial.get());
+    }
+
+    osg_visual->setName(sdf_visual->Get<std::string>("name"));
 
     to_visual->addChild(osg_visual);
     to_visual->setName(seg_.getName());
@@ -411,7 +435,7 @@ osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, urdf::Link urdf_link, osg:
     return joint_forward;
 }
 
-osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, sdf::ElementPtr sdf_link, osg::Group* root){
+osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, sdf::ElementPtr sdf_link, sdf::ElementPtr sdf_parent_link, osg::Group* root){
 
     std::vector<sdf::ElementPtr> visuals;
 
@@ -425,13 +449,57 @@ osg::Node* RobotModel::makeOsg2(KDL::Segment kdl_seg, sdf::ElementPtr sdf_link, 
     }
 
 
-    osg::PositionAttitudeTransform* joint_forward = new osg::PositionAttitudeTransform();
+    //transform to joint
+    osg::PositionAttitudeTransform *joint_forward = new osg::PositionAttitudeTransform();
+    //transform to parent link
+    //gazebo uses model position as reference. It is necessary convert to relative position from parent
+    //to create the same behavior of gazebo it is necessary transform link position to parent position
+    osg::PositionAttitudeTransform *to_parent_link = new osg::PositionAttitudeTransform();
+
+    //set the link position using relative position. the reference position is the parent.
+    osg::PositionAttitudeTransform *to_link = new osg::PositionAttitudeTransform();
+
+
     OSGSegment* seg = new OSGSegment(joint_forward, kdl_seg);
+
+    //if link doesn't have a parent then your position is relative to world
+    if (!sdf_parent_link){
+        if (sdf_link->HasElement("pose")){
+            sdf_pose_to_osg(sdf_link->GetElement("pose"), *to_link);
+        }
+    }
+    else { //link has a parent. your position is relative to the parent position
+
+        osg::Vec3 link_position;
+        osg::Quat link_rotation;
+        osg::Vec3 link_parent_position;
+        osg::Quat link_parent_rotation;
+
+        //get link position and rotation
+        if (sdf_link->HasElement("pose")){
+            sdf_pose_to_osg(sdf_link->GetElement("pose"), link_position, link_rotation);
+        }
+
+        //get parent link position and rotation
+        if (sdf_parent_link->HasElement("pose")){
+            sdf_pose_to_osg(sdf_parent_link->GetElement("pose"), link_parent_position, link_parent_rotation);
+        }
+
+        //revert to the parent rotation
+        to_parent_link->setAttitude(link_parent_rotation.inverse());
+        //rotate link
+        to_link->setAttitude(link_rotation);
+        //set relative position
+        to_link->setPosition(link_position-link_parent_position);
+    }
 
     joint_forward->setUserData( seg );
     joint_forward->setUpdateCallback(new OSGSegmentCallback);
 
-    root->addChild(joint_forward);
+    to_link->addChild(joint_forward);
+    to_parent_link->addChild(to_link);
+
+    root->addChild(to_parent_link);
 
     if (visuals.size() > 0)
     {
@@ -498,106 +566,61 @@ osg::Node* RobotModel::makeOsg( boost::shared_ptr<urdf::ModelInterface> urdf_mod
 
 osg::Node* RobotModel::makeOsg( sdf::ElementPtr sdf_model )
 {
-
     std::string model_name = sdf_model->GetAttribute("name")->GetAsString();
+    SdfElementPtrMap links = loadSdfModelLinks(sdf_model);
 
-    std::map<std::string, sdf::ElementPtr> child_link_joint_map;
-
-    if (sdf_model->HasElement("joint")){
-        sdf::ElementPtr jointElem = sdf_model->GetElement("joint");
-
-        while (jointElem){
-            std::string child_link_name = jointElem->GetElement("child")->Get<std::string>();
-            child_link_joint_map.insert(std::make_pair<std::string, sdf::ElementPtr>(child_link_name, jointElem));
-            jointElem = jointElem->GetNextElement("joint");
-        }
-    }
-
-
-    std::map<std::string, sdf::ElementPtr> links_map;
-
-    if (sdf_model->HasElement("link")){
-        sdf::ElementPtr linkElem = sdf_model->GetElement("link");
-        while (linkElem){
-            std::string link_name = linkElem->Get<std::string>("name");
-            links_map.insert(std::make_pair<std::string, sdf::ElementPtr>(link_name, linkElem));
-            linkElem = linkElem->GetNextElement("link");
-        }
-    }
-
-    std::map<std::string, sdf::ElementPtr>::iterator links_it;
-    std::map<std::string, sdf::ElementPtr>::iterator child_link_joint_it;
-    std::map<std::string, std::vector<std::string> > parent_childs_map;
-
-    for (links_it = links_map.begin(); links_it != links_map.end(); links_it++) {
-        std::string child_name = links_it->first;
-        std::string parent_name = "root";
-
-        if ((child_link_joint_it = child_link_joint_map.find(child_name)) != child_link_joint_map.end()) {
-            parent_name = child_link_joint_it->second->GetElement("parent")->Get<std::string>();
-        }
-
-        std::cout << "parent_name: " << parent_name << std::endl;
-        std::cout << "child_name: " << child_name << std::endl;
-
-        std::map<std::string, std::vector<std::string> >::iterator parent_it = parent_childs_map.find(parent_name);
-
-        if (parent_it == parent_childs_map.end()){
-            std::vector<std::string> childs;
-            childs.push_back(child_name);
-            parent_childs_map.insert(std::make_pair<std::string, std::vector<std::string> >(parent_name, childs));
-        }
-        else {
-            parent_it->second.push_back(child_name);
-        }
-    }
-
-    KDL::Tree tree("root");
-    addSegmentRecursive(parent_childs_map, "root", tree);
-
+    KDL::Tree tree;
+    kdl_parser::treeFromSdfModel(sdf_model, tree);
 
     KDL::SegmentMap::const_iterator root = tree.getRootSegment();
 
     std::vector<KDL::SegmentMap::const_iterator> segment_buffer;
-    std::vector<osg::Node*> hook_buffer;
-
-    osg::Node* hook = 0;
-    segment_buffer.reserve(segment_buffer.size() + std::distance(root->second.children.begin(), root->second.children.end()));
     segment_buffer.insert(segment_buffer.end(), root->second.children.begin(), root->second.children.end());
 
+    std::vector<osg::Node*> hook_buffer;
     for(uint i = 0; i < root->second.children.size(); i++){
         hook_buffer.push_back(root_);
     }
 
-
+    osg::Node* hook = 0;
     while (!segment_buffer.empty()){
 
-        std::map<std::string, sdf::ElementPtr>::const_iterator link_element;
-
         KDL::SegmentMap::const_iterator it = segment_buffer.back();
+        KDL::SegmentMap::const_iterator parent_it = it->second.parent;
+
         segment_buffer.pop_back();
         KDL::Segment kdl_segment = it->second.segment;
+        KDL::Segment kdl_parent_segment = parent_it->second.segment;
 
         if (it->second.children.size() > 0){
-            segment_buffer.reserve(segment_buffer.size() + std::distance(it->second.children.begin(), it->second.children.end()));
             segment_buffer.insert(segment_buffer.end(), it->second.children.begin(), it->second.children.end());
         }
 
-        if (links_map.find(kdl_segment.getName()) != links_map.end()){
-            sdf::ElementPtr sdf_link = links_map[kdl_segment.getName()];
+        std::map<std::string, sdf::ElementPtr>::iterator link_itr = links.find(kdl_segment.getName());
+        std::map<std::string, sdf::ElementPtr>::iterator link_parent_itr = links.find(kdl_parent_segment.getName());
+
+        if (link_itr != links.end()){
+            sdf::ElementPtr sdf_link = link_itr->second;
+            sdf::ElementPtr sdf_parent_link;
+
+            if (link_parent_itr != links.end()) {
+                sdf_parent_link = link_parent_itr->second;
+            }
 
             //create osg link
             hook = hook_buffer.back();
             hook_buffer.pop_back();
 
-            osg::Node* new_hook = 0;
-            new_hook = makeOsg2(kdl_segment, sdf_link, hook->asGroup());
+            osg::Node* new_hook = makeOsg2(kdl_segment, sdf_link, sdf_parent_link, hook->asGroup());
 
             //Append hooks
             for(uint i = 0; i < it->second.children.size(); i++){
                 hook_buffer.push_back(new_hook);
             }
 
+            segmentNames_.push_back(kdl_segment.getName());
+            if(kdl_segment.getJoint().getType() != KDL::Joint::None)
+                jointNames_.push_back(kdl_segment.getJoint().getName());
         }
 
     }
@@ -607,12 +630,14 @@ osg::Node* RobotModel::makeOsg( sdf::ElementPtr sdf_model )
 
 osg::Node* RobotModel::load(QString path){
 
+    loadPlugins();
     loadEmptyScene();
 
     QString suffix = QFileInfo(path).suffix().toLower();
 
     if (loadFunctions.contains(suffix)){
-        return CALL_MEMBER_POINTER_FUNCTION(*this, loadFunctions[suffix])(path);
+        osg::Node *node= CALL_MEMBER_POINTER_FUNCTION(*this, loadFunctions[suffix])(path);
+        return node;
     }
     else {
         LOG_ERROR("the %s type of file is not supported .", suffix.toStdString().c_str());
@@ -643,8 +668,6 @@ osg::Node* RobotModel::loadSDF(QString path)
 {
     rootPrefix = QDir(QFileInfo(path).absoluteDir());
 
-    std::cout << "rootPrefix: " << rootPrefix.absolutePath().toStdString() << std::endl;
-
     sdf::SDFPtr sdf(new sdf::SDF);
 
     if (!sdf::init(sdf)){
@@ -663,6 +686,34 @@ osg::Node* RobotModel::loadSDF(QString path)
     }
 
     return makeOsg(sdf->root->GetElement("model"));
+}
+
+void RobotModel::loadPlugins()
+{
+    osgDB::FileNameList plugins = osgDB::listAllAvailablePlugins();
+    for(osgDB::FileNameList::iterator itr = plugins.begin();
+        itr != plugins.end();
+        ++itr)
+    {
+        osgDB::ReaderWriterInfoList infoList;
+        osgDB::queryPlugin(*itr, infoList);
+    }
+}
+
+SdfElementPtrMap RobotModel::loadSdfModelLinks(sdf::ElementPtr sdf_model)
+{
+    SdfElementPtrMap links;
+
+    if (sdf_model->HasElement("link")){
+        sdf::ElementPtr linkElem = sdf_model->GetElement("link");
+        while (linkElem){
+            std::string link_name = linkElem->Get<std::string>("name");
+            links.insert(std::make_pair<std::string, sdf::ElementPtr>(link_name, linkElem));
+            linkElem = linkElem->GetNextElement("link");
+        }
+    }
+
+    return links;
 }
 
 OSGSegment* RobotModel::getSegment(std::string name)
@@ -686,6 +737,7 @@ bool RobotModel::setJointState(std::string jointName, double jointVal)
 
     OSGSegment* jnt = dynamic_cast<OSGSegment*>(node->getUserData());
     jnt->setJointPos(jointVal);
+
     return true;
 }
 

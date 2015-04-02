@@ -17,6 +17,16 @@ inline void urdf_to_osg(urdf::Pose& in, osg::PositionAttitudeTransform& out){
     out.setAttitude(osg::Quat(in.rotation.x, in.rotation.y, in.rotation.z, in.rotation.w));
 }
 
+inline void sdf_pose_to_osg(sdf::ElementPtr pose, osg::Vec3& pos, osg::Quat& quat)
+{
+    double x, y, z;
+    double roll, pitch, yaw;
+    sscanf(pose->Get<std::string>().c_str(), "%lf %lf %lf %lf %lf %lf", &x, &y, &z, &roll, &pitch, &yaw);
+    pos.set(x, y, z);
+    osg::Quat q = osg::Quat(roll, osg::Vec3d(1, 0, 0), pitch, osg::Vec3d(0, 1, 0), yaw, osg::Vec3d(0, 0, 1));
+    quat.set(q.x(), q.y(), q.z(), q.w());
+}
+
 
 inline void sdf_pose_to_osg(sdf::ElementPtr pose, osg::PositionAttitudeTransform& out)
 {
@@ -37,6 +47,23 @@ inline void sdf_size_to_osg(sdf::ElementPtr size, osg::Vec3& out)
 inline void sdf_scale_to_osg(sdf::ElementPtr scale, osg::Vec3& out)
 {
     sdf_size_to_osg(scale, out);
+}
+
+inline void sdf_color_to_osg(sdf::ElementPtr color, osg::Vec4& out)
+{
+    double r, g, b, a;
+    sscanf(color->Get<std::string>().c_str(), "%lf %lf %lf %lf", &r, &g, &b, &a);
+    out.set(r, g, b, a);
+}
+
+inline void toRPY(osg::Quat quat, double& roll, double& pitch, double& yaw){
+    double x = quat.x();
+    double y = quat.y();
+    double z = quat.z();
+    double w = quat.w();
+    roll = atan2(2 * (x * y + w * z), w * w + x * x - y * y - z * z);
+    pitch = asin(-2 * (x * z - w * y));
+    yaw = atan2(2 * (y * z + w * x), w * w - x * x - y * y + z * z);
 }
 
 inline osg::Node* findNamedNode(const std::string& searchName,
@@ -82,6 +109,28 @@ inline osg::Node* findNamedNode(const std::string& searchName,
     {
         return NULL; // leaf node, no match
     }
+}
+
+void printNodeStructureRecursive(osg::Node* node, int levelCount){
+
+    for (int i = 0; i < levelCount; i++) std::cout << "--";
+    std::cout << node->className() << "(" <<  node->getName() << ")" << std::endl;
+
+    osg::Group* group = node->asGroup();
+
+    if (group)
+    {
+        for (unsigned int i = 0 ; i < group->getNumChildren(); i ++)
+        {
+            printNodeStructureRecursive(group->getChild(i), ++levelCount);
+        }
+    }
+
+
+}
+
+void printNodeStructure(osg::Node *node){
+    printNodeStructureRecursive(node, 0);
 }
 
 // Visitor to return the world coordinates of a node.
