@@ -12,9 +12,12 @@
 #include <osg/MatrixTransform>
 #include <osgDB/ReadFile>
 #include <osgFX/Outline>
-#include <QObject>
 #include <QDir>
-
+#include <QHash>
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <sdf/sdf.hh>
 
 /**
  * @brief Data structure that is attached as 'User Data' to nodes within the RobotModel.
@@ -103,6 +106,24 @@ protected:
    */
    void attachVisuals(std::vector<boost::shared_ptr<urdf::Visual> > &visual_array, QDir prefix = QDir());
 
+   /**
+   * @brief Attach visual mesh to node.
+   *
+   * Should only be called during initial construction of the robot model.
+   *
+   * @param visual: Parsed SDF tag (using sdformat) of the visual.
+   */
+   void attachVisual(sdf::ElementPtr visual, QDir prefix = QDir());
+
+   /**
+   * @brieg Create nodes with visual meshes
+   *
+   * Should only be called during initial construction of the robot model
+   *
+   * @param visual_array: Parsed SDF tag (using sdformat) of the visual.
+   */
+   void attachVisuals(std::vector<sdf::ElementPtr> &visual_array, QDir prefix = QDir());
+
 private:
     KDL::Segment seg_; /**< KDKL representation of the segment */
     KDL::Frame toTipKdl_; /**< Temp storage for the current joint pose */
@@ -151,12 +172,16 @@ public:
     }
 };
 
+typedef std::map<std::string, sdf::ElementPtr> SdfElementPtrMap;
+
 /**
  * @brief This class is used for creating a visualization of a robot model and access it.
  *
  */
 class RobotModel
 {
+    typedef osg::Node* (RobotModel::*LoadModelFunctionPtr)(QString path);
+
 public:
 /**
  * @brief Constructor, does nearly nothing.
@@ -209,14 +234,39 @@ public:
      */
     const std::vector<std::string>& getSegmentNames(){return segmentNames_;}
 
+
 protected:
+
     osg::Node* makeOsg2(KDL::Segment kdl_seg, urdf::Link urdf_link, osg::Group* root);
     osg::Node* makeOsg( boost::shared_ptr<urdf::ModelInterface> urdf_model );
+
+    osg::Node* makeOsg2(KDL::Segment kdl_seg, sdf::ElementPtr sdf_link, sdf::ElementPtr sdf_parent_link, osg::Group* root);
+    osg::Node* makeOsg( sdf::ElementPtr sdf );
+
+    osg::Node* loadURDF(QString path);
+
+    /**
+     * @brief load SDF file by filename
+     */
+    osg::Node* loadSDF(QString path);
+
+    /**
+     * @brief load openscenegraph plugins
+     *
+     * these plugins are used to load meshs in a openscenegraph structure
+     */
+    void loadPlugins();
+
+    SdfElementPtrMap loadSdfModelLinks(sdf::ElementPtr sdf_model);
 
 protected:
     osg::Group* root_; /**< Root of the OSG scene containing the robot */
     std::vector<std::string> jointNames_; /**< Joint names defined in URDF (joint of type none are NOT included) */
     std::vector<std::string> segmentNames_; /**< Segment names defined in URDF */
+
+    //Hash with pointer function
+    //this functions load robot definition files such as SDF, URDF
+    QHash<QString, LoadModelFunctionPtr> loadFunctions;
 
     std::string modelName; /**< Model name */
 

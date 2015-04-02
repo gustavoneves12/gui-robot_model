@@ -160,6 +160,7 @@ void RobotVisualization::setJointsSize(double size)
 
 void RobotVisualization::updateDataIntern(base::samples::Joints const& value)
 {
+    std::cout << "RobotVisualization::updateDataIntern" << std::endl;
     vector<string> names = getJointNames();
     if (value.hasNames())
         names = value.names;
@@ -178,6 +179,8 @@ void RobotVisualization::updateDataIntern(base::samples::Joints const& value)
             setJointState(names[i], 0);
         }
         else{
+
+            std::cout << "names: " << names[i] << " - " << value[i].position << std::endl;
             setJointState(names[i], value[i].position);
         }
     }

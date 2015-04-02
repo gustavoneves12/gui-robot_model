@@ -1,0 +1,30 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+	<world name="test">
+	 
+		<include>
+		    <uri>model://sun</uri>
+		</include>
+		
+		<!-- 
+		<include>
+		    <uri>model://single_link</uri>
+		</include>
+		 -->
+        
+        <!-- 
+        <include>
+            <uri>model://multiple_visuals</uri>
+        </include>
+         -->
+         
+        <include>
+            <uri>model://multiple_links</uri>
+        </include>
+        		
+	    <scene>
+	       <grid>false</grid>
+	    </scene>
+				
+	</world>
+</sdf>
